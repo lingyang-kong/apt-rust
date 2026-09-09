@@ -1,0 +1,126 @@
+name: Publish APT archive
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: Build even when the published manifest is current
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-pages
+  cancel-in-progress: false
+
+env:
+  PUBLISHED_MANIFEST_URL: ${{ format('{0}/releases.json', vars.APT_BASE_URL || 'https://lingyang-kong.github.io/rust') }}
+
+jobs:
+  poll:
+    if: vars.PUBLICATION_ENABLED == 'true'
+    runs-on: ubuntu-slim
+    outputs:
+      changed: ${{ steps.poll.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Poll the published manifest
+        id: poll
+        env:
+          FORCE_BUILD: ${{ inputs.force_build || false }}
+        run: |
+          changed="$(scripts/poll-release.sh)"
+          printf 'changed=%s\n' "$changed" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: poll
+    if: needs.poll.outputs.changed == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pages: read
+    env:
+      CACHE_DIR: .build/cache
+    steps:
+      - name: Install shell and packaging dependencies
+        id: install
+        background: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            bash jq curl gnupg apt-utils dpkg-dev binutils patchelf xz-utils \
+            coreutils findutils util-linux shellcheck
+
+      - uses: actions/configure-pages@v5
+        background: true
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Restore build cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: rust-apt-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            rust-apt-cache-${{ runner.os }}-
+
+      - wait: install
+
+      - name: Run ShellCheck
+        id: shellcheck
+        background: true
+        run: shellcheck scripts/*.sh scripts/lib/*.sh tests/*.sh
+
+      - name: Run shell tests
+        id: shell-tests
+        background: true
+        run: tests/test.sh
+
+      - name: Build the archive
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: scripts/sync-apt-repo.sh
+
+      - name: Test the generated archive on Jammy
+        run: tests/test-jammy.sh dist
+
+      - wait: [shellcheck, shell-tests]
+
+      - parallel:
+          - name: Save build cache
+            uses: actions/cache/save@v4
+            with:
+              path: ${{ env.CACHE_DIR }}
+              key: ${{ steps.cache.outputs.cache-primary-key }}
+
+          - name: Upload Pages artifact
+            uses: actions/upload-pages-artifact@v3
+            with:
+              path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-slim
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
