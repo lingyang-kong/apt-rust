@@ -1,6 +1,5 @@
 # Generated APT archive, reusable downloads, and local build state
 /dist
 /.dist.generations/
-/dist.previous/
 /.build/
 /.rust-archive-*/

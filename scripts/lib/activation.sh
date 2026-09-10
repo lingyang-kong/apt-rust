@@ -47,9 +47,6 @@ check_archive_output() {
 	if [[ -L $output ]]; then
 		archive__generation_target "$output" "$store" >/dev/null
 	elif [[ -e $output ]]; then
-		if [[ -d $output && -f $output/releases.json ]]; then
-			die "archive directory needs offline migration: scripts/migrate-archive.sh --offline '$output'"
-		fi
 		die "refusing to replace an unmanaged archive path: $output"
 	elif [[ -e $store || -L $store ]]; then
 		archive__check_store "$store"
@@ -114,65 +111,4 @@ activate_archive() (
 	if [[ -n $old && $old != "$generation" ]]; then
 		rm --recursive --force -- "$old"
 	fi
-)
-
-migrate_archive_offline() (
-	set -o errexit -o nounset -o pipefail
-	local output=$1 parent store generation='' switch_dir='' target='' generation_lock
-	output=$(realpath --canonicalize-missing --no-symlinks -- "$output")
-	parent=$(dirname -- "$output")
-	store=$(archive__store_path "$output")
-	if [[ -L $output ]]; then
-		check_archive_output "$output"
-		return
-	fi
-	if [[ ! -d $output || ! -f $output/releases.json ]]; then
-		die 'offline migration requires an existing archive directory'
-	fi
-	archive__prepare_store "$store"
-	if ! exec {generation_lock}>"$store/lock" || ! flock --exclusive "$generation_lock"; then
-		die 'cannot lock archive store'
-	fi
-	if [[ -L $output ]]; then
-		check_archive_output "$output"
-		return
-	fi
-	if [[ ! -d $output || ! -f $output/releases.json ]]; then
-		die 'offline migration requires an existing archive directory'
-	fi
-	cleanup_migration() {
-		local status=$? published=''
-		if [[ -L $output ]]; then published=$(readlink -- "$output"); fi
-		if [[ -n $generation && -f $generation/releases.json && $published != "$target" &&
-			! -e $output && ! -L $output ]]; then
-			if ! mv --no-target-directory -- "$generation" "$output"; then
-				printf 'Previous archive remains at %s\n' "$generation" >&2
-			fi
-		elif [[ -n $generation && -d $generation && ! -f $generation/releases.json ]]; then
-			rmdir -- "$generation"
-		fi
-		if [[ -n $switch_dir ]]; then rm --recursive --force -- "$switch_dir"; fi
-		exit "$status"
-	}
-	trap cleanup_migration EXIT
-	trap 'exit 143' TERM
-	trap 'exit 130' INT
-	trap 'exit 129' HUP
-	if ! generation=$(mktemp --directory "$store/generation-XXXXXX"); then
-		die 'cannot allocate archive generation'
-	fi
-	target="${store##*/}/${generation##*/}"
-	if ! switch_dir=$(mktemp --directory "$parent/.rust-archive-switch-XXXXXX") ||
-		! ln --symbolic -- "$target" "$switch_dir/current"; then
-		die 'cannot prepare archive pointer'
-	fi
-	# This one-time conversion has an offline window; ordinary publishing never
-	# moves the public path away. Catchable interruptions restore the directory.
-	if ! mv --no-target-directory -- "$output" "$generation"; then
-		die 'cannot move archive into generation store'
-	fi
-	if ! mv --force --no-target-directory -- "$switch_dir/current" "$output"; then
-		die 'cannot install archive pointer'
-	fi
-	printf 'Migrated archive to managed generations: %s\n' "$output"
 )

@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PUBLISHED_MANIFEST_URL: ${{ format('{0}/releases.json', vars.APT_BASE_URL || 'https://lingyang-kong.github.io/rust') }}
+  PUBLISHED_MANIFEST_URL: ${{ format('{0}/releases.json', vars.APT_BASE_URL || 'https://lingyang-kong.github.io/apt-rust') }}
 
 jobs:
   poll:

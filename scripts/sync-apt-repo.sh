@@ -100,7 +100,7 @@ if ! grep --fixed-strings --line-regexp --quiet 'VERSION_ID="22.04"' /etc/os-rel
 	die 'build on Ubuntu 22.04 to derive Jammy system dependencies'
 fi
 if [[ -z ${APT_GPG_PRIVATE_KEY:-} ]]; then
-	die 'APT_GPG_PRIVATE_KEY is required; see README for local test keys'
+	die 'APT_GPG_PRIVATE_KEY is required; see docs/maintaining.md for local test keys'
 fi
 printf '%s\n' "$APT_GPG_PRIVATE_KEY" >"$WORK_DIR/archive-private.asc"
 chmod 600 "$WORK_DIR/archive-private.asc"

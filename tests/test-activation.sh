@@ -10,7 +10,7 @@ activation__fixture() {
 # Inject failure in the same shell as activation, immediately before/after the
 # actual rename. The signal targets only that activation subshell.
 activation__with_fault() (
-	local operation=$1 stage=$2 output=$3 fault=$4 armed=true
+	local stage=$1 output=$2 fault=$3 armed=true
 	mv() {
 		local destination=${!#}
 		if [[ $destination == "$output" && $armed == true ]]; then
@@ -29,10 +29,7 @@ activation__with_fault() (
 			command mv "$@"
 		fi
 	}
-	case $operation in
-	activate) activate_archive "$stage" "$output" ;;
-	migrate) migrate_archive_offline "$output" ;;
-	esac
+	activate_archive "$stage" "$output"
 )
 
 test_atomic_activation() (
@@ -81,7 +78,7 @@ test_atomic_activation() (
 		stage="$directory/stage-$fault"
 		activation__fixture "$stage" new
 		status=0
-		if activation__with_fault activate "$stage" "$output" "$fault" >"$directory/$fault.log" 2>&1; then
+		if activation__with_fault "$stage" "$output" "$fault" >"$directory/$fault.log" 2>&1; then
 			die "$fault unexpectedly succeeded"
 		else
 			status=$?
@@ -120,57 +117,19 @@ test_atomic_activation() (
 		assert_eq retry "$(jq --raw-output '.version' "$output/releases.json")" "$fault retry"
 	done
 
-	output="$directory/legacy"
-	activation__fixture "$output" legacy
-	activation__fixture "$directory/legacy-stage" new
-	expect_failure 'normal activation requires offline directory migration' activate_archive \
-		"$directory/legacy-stage" "$output"
-	assert_eq legacy "$(jq --raw-output '.version' "$output/releases.json")" 'legacy output preserved'
-	assert_file "$directory/legacy-stage/releases.json" 'legacy refusal preserves staging'
-	expect_failure 'publisher refuses legacy output before creating a cache' env \
+	output="$directory/unmanaged"
+	activation__fixture "$output" existing
+	activation__fixture "$directory/unmanaged-stage" new
+	expect_failure 'normal activation refuses unmanaged directories' activate_archive \
+		"$directory/unmanaged-stage" "$output"
+	assert_eq existing "$(jq --raw-output '.version' "$output/releases.json")" 'unmanaged output preserved'
+	assert_file "$directory/unmanaged-stage/releases.json" 'unmanaged output refusal preserves staging'
+	expect_failure 'publisher refuses unmanaged output before creating a cache' env \
 		OUT_DIR="$output" CACHE_DIR="$directory/unused-cache" "$ROOT_DIR/scripts/sync-apt-repo.sh"
 	if [[ -e $directory/unused-cache ]]; then
-		die 'legacy output refusal created a build cache'
+		die 'unmanaged output refusal created a build cache'
 	fi
-	ln --symbolic -- legacy "$directory/foreign-pointer"
-	expect_failure 'foreign symlink refused' activate_archive "$directory/legacy-stage" "$directory/foreign-pointer"
-	assert_eq legacy "$(readlink -- "$directory/foreign-pointer")" 'foreign pointer preserved'
-)
-
-test_offline_migration() (
-	set -o errexit -o nounset -o pipefail
-	local directory="$WORK_DIR/migration" output before fault expected status
-	mkdir --parents -- "$directory"
-	output="$directory/current"
-	activation__fixture "$output" old
-	before=$(sha256 "$output/package.deb")
-	"$ROOT_DIR/scripts/migrate-archive.sh" --offline "$output"
-	assert_symlink "$output" 'offline migration creates managed pointer'
-	assert_eq "$before" "$(sha256 "$output/package.deb")" 'migration preserves package bytes'
-	before=$(readlink -- "$output")
-	"$ROOT_DIR/scripts/migrate-archive.sh" --offline "$output"
-	assert_eq "$before" "$(readlink -- "$output")" 'migration is idempotent'
-	expect_failure 'offline mode must be explicit' "$ROOT_DIR/scripts/migrate-archive.sh" "$output"
-
-	for fault in rename-failure before-term after-term; do
-		output="$directory/$fault"
-		activation__fixture "$output" old
-		status=0
-		if activation__with_fault migrate '' "$output" "$fault" >"$directory/$fault.log" 2>&1; then
-			die "$fault migration unexpectedly succeeded"
-		else
-			status=$?
-		fi
-		case $fault in
-		rename-failure) expected=1 ;;
-		*) expected=143 ;;
-		esac
-		assert_eq "$expected" "$status" "$fault migration exit status"
-		assert_eq old "$(jq --raw-output '.version' "$output/releases.json")" "$fault migration preserves archive"
-		if [[ $fault == after-term ]]; then
-			assert_symlink "$output" 'committed migration survives interruption'
-		elif [[ -L $output ]]; then
-			die 'uncommitted migration did not restore the directory'
-		fi
-	done
+	ln --symbolic -- unmanaged "$directory/foreign-pointer"
+	expect_failure 'foreign symlink refused' activate_archive "$directory/unmanaged-stage" "$directory/foreign-pointer"
+	assert_eq unmanaged "$(readlink -- "$directory/foreign-pointer")" 'foreign pointer preserved'
 )

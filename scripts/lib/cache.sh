@@ -44,8 +44,8 @@ publisher_digest() {
 			die 'cannot enter repository directory'
 		fi
 		sha256sum scripts/poll-release.sh scripts/sync-apt-repo.sh \
-			scripts/migrate-archive.sh scripts/lib/activation.sh \
-			scripts/lib/cache.sh scripts/lib/upstream.sh scripts/lib/archive.sh \
+			scripts/lib/activation.sh \
+			packaging/rust.pref scripts/lib/cache.sh scripts/lib/upstream.sh scripts/lib/archive.sh \
 			scripts/lib/retention.sh scripts/lib/history-auth.sh \
 			keys/rust-release.asc .github/workflows/publish.yml \
 			tests/test-jammy.sh tests/jammy-smoke.sh
@@ -68,16 +68,6 @@ check_package_cache() {
 	fi
 	if ! jq --exit-status --slurpfile identity "$identity" '.identity == $identity[0]' \
 		"$directory/metadata.json" >/dev/null; then
-		if jq --exit-status --slurpfile identity "$identity" '
-            (.identity.package_recipe_format // 1) == 1 and
-            $identity[0].package_recipe_format == 2 and
-            (.identity | del(.recipe_sha256, .package_recipe_format)) ==
-            ($identity[0] | del(.recipe_sha256, .package_recipe_format))
-        ' "$directory/metadata.json" >/dev/null; then
-			# Rebuild a legacy entry once. record_package_cache requires exact
-			# agreement with its stored hashes before updating the identity.
-			return
-		fi
 		die 'package inputs changed at an existing version; increment the packaging revision'
 	fi
 	while IFS=$'\t' read -r name digest; do

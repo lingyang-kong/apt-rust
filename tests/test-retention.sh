@@ -85,7 +85,6 @@ test_retained_archive() {
 	local new_metadata="$directory/new-metadata.json"
 	local old_stage="$directory/old-stage"
 	local retained_stage="$directory/retained-stage"
-	local legacy_stage="$directory/legacy-stage"
 	local https_stage="$directory/https-stage"
 	local cached_stage="$directory/cached-stage"
 	local invalid_shape_stage="$directory/invalid-shape-stage"
@@ -96,9 +95,7 @@ test_retained_archive() {
 	local evicted_stage="$directory/evicted-stage"
 	local empty_json="$directory/empty.json"
 	local old_json="$directory/old.json"
-	local legacy_json="$directory/legacy.json"
 	local cache="$directory/cache"
-	local legacy_cache="$directory/legacy-cache"
 	local https_cache="$directory/https-cache"
 	local normal_cache="$directory/normal-cache"
 	local eviction_cache="$directory/eviction-cache"
@@ -110,7 +107,7 @@ test_retained_archive() {
 	local new_version='1.92.0' new_revision='1' new_debian='1.92.0-1'
 	local current_bytes eviction_limit candidate madison old_download simulation
 	local package
-	mkdir --parents "$directory" "$cache" "$legacy_cache" "$https_cache" \
+	mkdir --parents "$directory" "$cache" "$https_cache" \
 		"$normal_cache" "$eviction_cache"
 	printf '%s\n' '{}' >"$empty_json"
 	make_test_key "$directory/gnupg" "$private"
@@ -160,19 +157,6 @@ test_retained_archive() {
 	retention__index_has "$retained_stage/dists/jammy/main/binary-amd64/Packages" rustc "$old_debian"
 	retention__index_has "$retained_stage/dists/jammy/main/binary-amd64/Packages" rustc "$new_debian"
 	retention__assert_previous_bytes "$old_stage" "$retained_stage"
-
-	# A pre-retention manifest had one top-level release.  Keep this path
-	# covered because published archives may be upgraded from that format.
-	jq 'del(.releases)' "$old_stage/releases.json" >"$legacy_json"
-	build_retained_archive "$new_packages" "$legacy_stage" "$new_metadata" "$private" \
-		'1000000000' "$legacy_json" "$old_stage/releases.json" "$legacy_cache"
-	jq -e --arg version "$new_version" '
-        (.releases | type == "array" and length == 2) and
-        any(.releases[]; .version == "1.91.1") and
-        any(.releases[]; .version == $version) and
-        (.packages | length == 24)
-    ' "$legacy_stage/releases.json" >/dev/null
-	retention__assert_previous_bytes "$old_stage" "$legacy_stage"
 
 	# Exercise the remote retrieval branch without contacting the network.
 	# The curl shim serves exactly the files in the local previous archive.

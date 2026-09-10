@@ -71,17 +71,6 @@ retention__read_previous_releases() {
 	if ! jq --compact-output '
         if type != "object" then error("published manifest is not an object")
         elif (.releases | type) == "array" then .releases[]
-        elif (.packages | type) == "array" then
-            . as $manifest |
-            ($manifest | del(.packages,.releases,.signing_fingerprint,.generated_at,
-                .deployment_bytes,.max_bytes))
-            + {
-                version: ($manifest.version // $manifest.release.version //
-                    $manifest.identity.release.version // ""),
-                debian_version: ($manifest.debian_version //
-                    $manifest.identity.debian_version // ""),
-                packages: $manifest.packages
-            }
         elif length == 0 then empty
         else error("published manifest has no release catalog")
         end
@@ -403,12 +392,8 @@ retention__render() {
 	fi
 	now=$(date --utc --iso-8601=seconds)
 	if ! jq --slurpfile releases "$selected" --arg fingerprint "$fingerprint" --arg now "$now" \
-		'. as $metadata
-         | ($releases | map(.packages[])) as $packages
-         | . + {
-             version: (.version // .release.version // .identity.release.version),
-             debian_version: (.debian_version // .identity.debian_version),
-             packages: $packages,
+		'. + {
+             packages: ($releases | map(.packages[])),
              releases: $releases,
              signing_fingerprint: $fingerprint,
              generated_at: $now
@@ -467,14 +452,7 @@ build_retained_archive() (
 	build_archive "$current_package_dir" "$stage" "$current_metadata" "$key_file" "$max_bytes"
 	current_release=$(mktemp "$scratch/current-release.XXXXXX")
 	jq --compact-output '
-        . as $manifest
-        | ($manifest.debian_version // $manifest.identity.debian_version // "") as $deb
-        | ($manifest.version // $manifest.release.version //
-            $manifest.identity.release.version // "") as $version
-        | ($manifest.packages // []) as $packages
-        | ($manifest | del(.packages,.releases,.signing_fingerprint,.generated_at,
-            .deployment_bytes,.max_bytes))
-        + {version:$version,debian_version:$deb,packages:$packages}
+        del(.releases,.signing_fingerprint,.generated_at,.deployment_bytes,.max_bytes)
     ' "$stage/releases.json" >"$current_release"
 	if ! retention__validate_release_shape "$(<"$current_release")"; then
 		die 'current archive has invalid release metadata'

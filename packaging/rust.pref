@@ -1,0 +1,3 @@
+Package: rustc cargo libstd-rust-* rustfmt rust-clippy rust-gdb rust-lldb rust-doc cargo-doc rust-src rust-all
+Pin: release o=Unofficial Rust APT
+Pin-Priority: 600

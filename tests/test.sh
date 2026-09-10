@@ -321,16 +321,12 @@ test_signed_archive_and_activation() {
 	expect_failure 'deployment size limit' build_archive "$TOY_PACKAGES" \
 		"$directory/oversized" "$metadata" "$private" '1'
 
-	mkdir -p -- "$current" "$next"
-	printf '{"version":"old"}\n' >"$current/releases.json"
+	mkdir -p -- "$directory/initial" "$next"
+	printf '{"version":"old"}\n' >"$directory/initial/releases.json"
 	printf '{"version":"new"}\n' >"$next/releases.json"
-	migrate_archive_offline "$current"
+	activate_archive "$directory/initial" "$current"
 	activate_archive "$next" "$current"
 	assert_eq 'new' "$(jq -er '.version' "$current/releases.json")" 'active archive'
-	if [[ -e "$current.previous" ]]; then
-		printf '%s\n' 'successful archive activation left a persistent previous archive' >&2
-		return 1
-	fi
 
 	mkdir -p -- "$unmanaged" "$directory/next-unmanaged"
 	printf 'keep me\n' >"$unmanaged/user-file"
@@ -390,7 +386,7 @@ EOF
 	: >"$WORK_DIR/workflow-output"
 	PUBLISHED_MANIFEST_URL='' \
 		FORCE_BUILD='' \
-		POLL_EXPECTED_URL='https://lingyang-kong.github.io/rust/releases.json' \
+		POLL_EXPECTED_URL='https://lingyang-kong.github.io/apt-rust/releases.json' \
 		POLL_MODE=success \
 		POLL_RESULT=false \
 		"$poll_script" >"$WORK_DIR/workflow-output"
@@ -462,12 +458,10 @@ tests=(
 	test_archive_safety
 	test_signed_archive_and_activation
 	test_atomic_activation
-	test_offline_migration
 	test_retained_archive
 	test_history_bootstrap
 	test_retained_archive_failures
 	test_package_and_publisher_fingerprints
-	test_legacy_fingerprint_migration
 	test_retained_cache_pruning
 	test_jammy_smoke_has_no_embedded_python
 	test_native_jammy_wrapper

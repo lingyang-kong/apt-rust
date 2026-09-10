@@ -180,20 +180,14 @@ metadata_rows() {
             (.debian_version // empty) as $version |
             if ($version | type) != "string" or ($version | length) == 0
             then error("manifest has no debian_version") else . end |
-            (if has("releases") then
-                if (.releases | type) != "array" then
-                    error("manifest releases is not an array")
-                else
-                    (.releases |
-                        map(select(.version == $manifest.version and
-                                   .debian_version == $manifest.debian_version))) as $current |
-                    if ($current | length) != 1 then
-                        error("manifest has no unique current release")
-                    else
-                        $current[0].packages
-                    end
-                end
-             else .packages end) |
+            if (.releases | type) != "array" then
+                error("manifest releases is not an array")
+            else . end |
+            (.releases | map(select(.version == $manifest.version and
+                                   .debian_version == $version))) as $current |
+            if ($current | length) != 1 then
+                error("manifest has no unique current release")
+            else $current[0].packages end |
             if (type != "array" or length == 0)
             then error("manifest has no package entries") else . end |
             .[] |
@@ -211,26 +205,23 @@ metadata_history_rows() {
 	local output=$2
 	jq -r '
         . as $manifest |
-        if has("releases") then
-            if (.releases | type) != "array" then
-                error("manifest releases is not an array")
-            else
-                .releases[] |
-                select(.version != $manifest.version or
-                       .debian_version != $manifest.debian_version) |
-                (.debian_version // empty) as $version |
-                if ($version | type) != "string" or ($version | length) == 0
-                then error("historical release has no debian_version") else . end |
-                if (.packages | type) != "array" or (.packages | length) == 0
-                then error("historical release has no package entries") else . end |
-                .packages[] |
-                if (.filename | type) != "string" or (.sha256 | type) != "string"
-                   or (.sha256 | test("^[0-9a-f]{64}$") | not)
-                then error("historical package entry is incomplete") else . end |
-                [.filename, .sha256, (if has("size") then (.size | tostring) else "" end), $version]
-                | @tsv
-            end
-        else empty end
+        if (.releases | type) != "array" then
+            error("manifest releases is not an array")
+        else . end |
+        .releases[] |
+        select(.version != $manifest.version or
+               .debian_version != $manifest.debian_version) |
+        .debian_version as $version |
+        if ($version | type) != "string" or ($version | length) == 0
+        then error("historical release has no debian_version") else . end |
+        if (.packages | type) != "array" or (.packages | length) == 0
+        then error("historical release has no package entries") else . end |
+        .packages[] |
+        if (.filename | type) != "string" or (.sha256 | type) != "string"
+           or (.sha256 | test("^[0-9a-f]{64}$") | not)
+        then error("historical package entry is incomplete") else . end |
+        [.filename, .sha256, (if has("size") then (.size | tostring) else "" end), $version]
+        | @tsv
     ' "$manifest" >"$output"
 }
 
@@ -242,11 +233,9 @@ verify_historical_files() {
 	local names=${rows%.rows}.historical-names
 	base=$(cd -- "$(dirname -- "$manifest")" && pwd -P)
 	if ! jq -e '
-        if has("releases") then
-            (.releases | type == "array") and
-            all(.releases[]; (.packages | type == "array" and length == 12) and
-                ([.packages[].filename] | length == (unique | length)))
-        else true end
+        (.releases | type == "array") and
+        all(.releases[]; (.packages | type == "array" and length == 12) and
+            ([.packages[].filename] | length == (unique | length)))
     ' "$manifest" >/dev/null; then
 		die "historical release does not contain a complete package set: $manifest"
 	fi

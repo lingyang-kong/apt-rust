@@ -146,6 +146,9 @@ archive__refresh_indexes() {
 
 archive__write_static_files() {
 	local stage=$1
+	if ! install --mode=0644 -- "$ROOT_DIR/packaging/rust.pref" "$stage/rust.pref"; then
+		die 'cannot install archive preference file'
+	fi
 	touch -- "$stage/.nojekyll"
 	cat >"$stage/index.html" <<'HTML'
 <!doctype html><html lang="en"><meta charset="utf-8"><title>Unofficial Rust APT</title>

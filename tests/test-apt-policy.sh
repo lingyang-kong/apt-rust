@@ -48,7 +48,8 @@ test_apt_candidate_selection() (
 	done
 	printf 'deb [trusted=yes] file:%s/ubuntu jammy main\ndeb [trusted=yes] file:%s/rust-same jammy main\n' \
 		"$directory" "$directory" >"$directory/sources.list"
-	printf 'Package: rustc\nPin: release o=Unofficial Rust APT\nPin-Priority: 600\n' >"$directory/preferences"
+	archive__write_static_files "$directory"
+	cp -- "$directory/rust.pref" "$directory/preferences"
 	apt-get "${APT_TEST_OPTIONS[@]}" update >"$directory/update.log" 2>&1
 	candidate=$(apt-cache "${APT_TEST_OPTIONS[@]}" policy rustc | awk '/Candidate:/ { print $2 }')
 	assert_eq '1.91.1-1' "$candidate" 'optional origin pin selects our same-upstream package'

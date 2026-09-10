@@ -104,13 +104,11 @@ verify_history_catalog() (
                              package:.[3], debian_version:.[4], architecture:.[5]}}) | from_entries
     ' "$scratch/index.tsv" >"$scratch/index.json"
 	if ! jq --exit-status --slurpfile index "$scratch/index.json" '
-        (.releases // [{debian_version:.debian_version, packages:.packages}]) as $releases
+        .releases as $releases
         | ([$releases[].packages[]]) as $packages
         | ([$packages[].filename] | sort) == ($index[0] | keys | sort) and
-          (if has("packages") then
-              (.packages | map({filename,sha256}) | sort_by(.filename)) ==
-              ($packages | map({filename,sha256}) | sort_by(.filename))
-           else true end) and
+          (.packages | map({filename,sha256}) | sort_by(.filename)) ==
+          ($packages | map({filename,sha256}) | sort_by(.filename)) and
           all($releases[]; . as $release | all(.packages[];
             . as $p | $index[0][$p.filename] as $trusted |
             $trusted != null and
