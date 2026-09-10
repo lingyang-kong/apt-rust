@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 die() {
 	printf 'jammy-smoke: %s\n' "$*" >&2
@@ -13,13 +14,33 @@ progress() {
 	printf '\n== %s ==\n' "$*"
 }
 
-if (($# > 2)); then
-	die "usage: $0 [ARCHIVE=/repo] [PREVIOUS=/previous]"
+mode=release
+if [[ ${1:-} == '--mode' ]]; then
+	if (($# < 2)); then
+		die "usage: $0 [--mode release|full] ARCHIVE [PREVIOUS]"
+	fi
+	mode=$2
+	shift 2
 fi
-repo=${1:-/repo}
+if [[ $mode != release && $mode != full ]]; then
+	die "unknown smoke mode: $mode"
+fi
+if (($# < 1 || $# > 2)); then
+	die "usage: $0 [--mode release|full] ARCHIVE [PREVIOUS]"
+fi
+repo=$1
 previous=${2:-}
-if [[ ${JAMMY_SMOKE_IN_CONTAINER:-} != 1 ]]; then
-	die 'set JAMMY_SMOKE_IN_CONTAINER=1 when invoking this system-mutating test'
+if [[ $mode == release && -n $previous ]]; then
+	die 'release mode does not accept a previous archive'
+fi
+if [[ ${JAMMY_SMOKE_ALLOW_SYSTEM_CHANGES:-} != 1 ]]; then
+	die 'set JAMMY_SMOKE_ALLOW_SYSTEM_CHANGES=1 when invoking this system-mutating test'
+fi
+if ((EUID != 0)); then
+	die 'Jammy smoke test must run as root'
+fi
+if ! repo=$(realpath -- "$repo"); then
+	die "cannot resolve archive path: $repo"
 fi
 if [[ ! -d $repo ]]; then
 	die "archive directory does not exist: $repo"
@@ -28,6 +49,9 @@ if [[ ! -f "$repo/releases.json" ]]; then
 	die "archive has no releases.json: $repo"
 fi
 if [[ -n $previous ]]; then
+	if ! previous=$(realpath -- "$previous"); then
+		die "cannot resolve previous archive path: $previous"
+	fi
 	if [[ ! -d $previous ]]; then
 		die "previous archive directory does not exist: $previous"
 	fi
@@ -39,8 +63,6 @@ fi
 if [[ "$(dpkg --print-architecture)" != amd64 ]]; then
 	die 'Jammy smoke test requires amd64'
 fi
-# This check prevents accidentally running a system-mutating smoke test on a
-# different Ubuntu release when the script is invoked outside Docker.
 # shellcheck disable=SC1091
 . /etc/os-release
 if [[ ${ID:-} != ubuntu || ${VERSION_ID:-} != 22.04 ]]; then
@@ -48,12 +70,54 @@ if [[ ${ID:-} != ubuntu || ${VERSION_ID:-} != 22.04 ]]; then
 fi
 
 work=$(mktemp -d /tmp/rust-apt-smoke.XXXXXX)
-trap 'rm -rf -- "$work"' EXIT
+
+# The native wrapper clears the environment, but keep the smoke test safe when
+# called directly as well. These variables can select a rustup compiler,
+# wrapper, target directory, or inherited compiler flags.
+unset CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_ENCODED_RUSTFLAGS \
+	CARGO_HOME CARGO_NET_OFFLINE CARGO_TARGET_DIR RUSTC RUSTC_WRAPPER \
+	RUSTDOC RUSTDOCFLAGS RUSTFLAGS RUSTUP_DIST_SERVER RUSTUP_HOME \
+	RUSTUP_TOOLCHAIN RUSTUP_UPDATE_ROOT
+export CARGO_HOME="$work/cargo-home"
+mkdir --mode=0700 -- "$CARGO_HOME"
+
+keyring=/usr/share/keyrings/rust-archive-keyring.gpg
+source_file=/etc/apt/sources.list.d/rust-archive.sources
+source_backup="$work/rust-archive.sources.original"
+keyring_backup="$work/rust-archive-keyring.original"
+had_source=false
+had_keyring=false
+if [[ -e $source_file || -L $source_file ]]; then
+	cp --archive -- "$source_file" "$source_backup"
+	had_source=true
+	rm --force -- "$source_file"
+fi
+if [[ -e $keyring || -L $keyring ]]; then
+	cp --archive -- "$keyring" "$keyring_backup"
+	had_keyring=true
+fi
+cleanup() {
+	local status=$?
+	rm --force -- "$source_file"
+	if [[ $had_source == true ]]; then
+		mv --force -- "$source_backup" "$source_file"
+	fi
+	rm --force -- "$keyring"
+	if [[ $had_keyring == true ]]; then
+		mv --force -- "$keyring_backup" "$keyring"
+	fi
+	rm --recursive --force -- "$work"
+	exit "$status"
+}
+trap cleanup EXIT
 
 apt_options=(-o Dpkg::Use-Pty=0 -o Dpkg::Options::=--force-unsafe-io)
 
 apt_update() {
-	apt "${apt_options[@]}" update
+	apt "${apt_options[@]}" \
+		-o "Dir::Etc::sourcelist=$source_file" \
+		-o 'Dir::Etc::sourceparts=-' \
+		-o 'APT::Get::List-Cleanup=false' update
 }
 
 apt_install() {
@@ -61,26 +125,24 @@ apt_install() {
 }
 
 apt_upgrade() {
-	# Keep this as apt rather than apt-get: apt upgrade is allowed to bring in
-	# a newly versioned runtime package required by the upgraded compiler.
-	apt "${apt_options[@]}" upgrade --assume-yes
+	apt_install --no-remove "$@"
 }
 
-progress 'Updating the clean Jammy package lists'
-apt_update
-progress 'Installing compiler build and validation prerequisites'
-# Jammy's newest distro rust-lldb candidate depends on lldb-17 and
-# python3-lldb-17, which are unavailable in a clean 22.04 image.  Leave that
-# broken candidate out of the baseline: rust-all selects the usable distro
-# rust-gdb, and the archive rust-lldb (with matching LLVM 14 bindings) is installed
-# and tested below.  This keeps the bootstrap failure attributable to the
-# archive under test rather than to an unrelated Jammy dependency transition.
-apt_install ca-certificates gnupg build-essential gdb pkg-config libssl-dev jq
-progress 'Installing Jammy distro Rust packages for the ownership baseline'
-apt_install rust-all rust-doc cargo-doc rust-src
+write_source() {
+	local path=$1
+	local uri=$2
+	printf '%s\n' \
+		'Types: deb' \
+		"URIs: $uri" \
+		'Suites: jammy' \
+		'Components: main' \
+		'Architectures: amd64' \
+		"Signed-By: $keyring" >"$path"
+}
 
-keyring=/usr/share/keyrings/rust-archive-keyring.gpg
-install -D -m 0644 -- "$repo/rust-archive-keyring.gpg" "$keyring"
+if ! install -D -m 0644 -- "$repo/rust-archive-keyring.gpg" "$keyring"; then
+	die 'cannot install archive keyring'
+fi
 
 metadata_rows() {
 	local manifest=$1
@@ -296,6 +358,39 @@ verify_archive() {
 	printf 'Verified %d package checksums and exact Debian versions from %s\n' "$count" "$manifest"
 }
 
+file_uri() {
+	local path=$1
+	if ! jq --null-input --raw-output --arg path "$path" \
+		'$path | split("/") | map(@uri) | join("/")'; then
+		die "cannot encode archive path as a file URI: $path"
+	fi
+}
+
+verify_apt_readability() {
+	local archive=$1 checked=$2 history_rows=$3
+	local base name digest size version deb package expected
+	base=$(cd -- "$(dirname -- "$archive/releases.json")" && pwd -P)
+	for name in dists/jammy/main/binary-amd64/Packages \
+		dists/jammy/main/binary-amd64/Packages.gz; do
+		if ! /usr/sbin/runuser --user _apt -- test -r "$archive/$name"; then
+			die "APT user _apt cannot read $archive/$name; check archive directory permissions"
+		fi
+	done
+	while IFS=$'\t' read -r deb package expected; do
+		if ! /usr/sbin/runuser --user _apt -- test -r "$deb"; then
+			die "APT user _apt cannot read package $deb; check archive directory permissions"
+		fi
+	done <"$checked"
+	while IFS=$'\t' read -r name digest size version; do
+		if [[ -z $name ]]; then
+			continue
+		fi
+		if ! /usr/sbin/runuser --user _apt -- test -r "$base/$name"; then
+			die "APT user _apt cannot read historical package $base/$name; check archive directory permissions"
+		fi
+	done <"$history_rows"
+}
+
 assert_installed() {
 	local checked=$1
 	local deb package expected status installed
@@ -313,31 +408,7 @@ assert_installed() {
 			die "$package is $installed ($status), expected $expected"
 		fi
 	done <"$checked"
-	printf 'All archive packages are installed at their metadata version\n'
-}
-
-install_archive_set() {
-	apt_install rustc cargo
-	apt_install rust-all
-	# Install Jammy's generic debugger bindings immediately before the archive
-	# launcher.  The archive package pins the matching LLVM 14 implementation.
-	apt_install lldb python3-lldb
-	apt_install rust-lldb
-	apt_install rust-doc
-	apt_install cargo-doc
-	apt_install rust-src
-}
-
-write_source() {
-	local path=$1
-	local uri=$2
-	printf '%s\n' \
-		'Types: deb' \
-		"URIs: $uri" \
-		'Suites: jammy' \
-		'Components: main' \
-		'Architectures: amd64' \
-		"Signed-By: $keyring" >"$path"
+	printf 'All selected archive packages are installed at their metadata version\n'
 }
 
 verify_release_signature() {
@@ -362,104 +433,118 @@ current_checked=$work/current.checked
 current_names=$work/current.names
 verify_release_signature "$repo"
 verify_archive "$repo/releases.json" "$current_rows" "$current_checked" "$current_names"
+verify_apt_readability "$repo" "$current_checked" "${current_rows%.rows}.history.rows"
 if [[ -n $previous ]]; then
 	previous_rows=$work/previous.rows
 	previous_checked=$work/previous.checked
 	previous_names=$work/previous.names
 	verify_release_signature "$previous"
 	verify_archive "$previous/releases.json" "$previous_rows" "$previous_checked" "$previous_names"
+	verify_apt_readability "$previous" "$previous_checked" "${previous_rows%.rows}.history.rows"
 fi
 
-if ! old_runtime_line=$(
-	dpkg-query -W -f='${binary:Package}\t${Version}\t${db:Status-Status}\n' 2>/dev/null |
-		awk -F '\t' '$1 ~ /^libstd-rust-[0-9]/ && $3 == "installed" { print $1 "\t" $2; exit }'
-); then
-	old_runtime_line=
+install_checked=$current_checked
+if [[ $mode == release ]]; then
+	install_checked=$work/release.checked
+	awk -F '\t' '$2 != "rust-doc" && $2 != "cargo-doc" && $2 != "rust-src"' \
+		"$current_checked" >"$install_checked"
 fi
-if [[ -z $old_runtime_line ]]; then
-	die 'could not find the Jammy baseline libstd-rust runtime'
-fi
-old_runtime_package=${old_runtime_line%%$'\t'*}
-old_runtime_version=${old_runtime_line#*$'\t'}
-progress "Retaining baseline runtime $old_runtime_package through the upgrade"
-# A reverse dependency demonstrates runtime retention without relying on a
-# manually held package.  It is removed again during final cleanup.
-keepalive=$work/runtime-keepalive
-mkdir -p "$keepalive/DEBIAN"
-printf '%s\n' \
-	'Package: rust-apt-runtime-keepalive' \
-	'Version: 0.0.1' \
-	'Architecture: all' \
-	'Maintainer: Rust APT Test <test@example.invalid>' \
-	"Depends: $old_runtime_package (= $old_runtime_version)" \
-	'Description: Keep the Jammy Rust runtime during an upgrade test' \
-	' A temporary reverse dependency used only by the integration test.' \
-	>"$keepalive/DEBIAN/control"
-dpkg-deb --build --root-owner-group "$keepalive" "$work/runtime-keepalive.deb" >/dev/null
-dpkg --install "$work/runtime-keepalive.deb" >/dev/null
-
-source_file=/etc/apt/sources.list.d/rust-archive.sources
-write_source "$source_file" file:/repo
-
+mapfile -t current_all_specs < <(awk -F '\t' '{print $2 "=" $3}' "$current_checked")
+mapfile -t current_specs < <(awk -F '\t' '{print $2 "=" $3}' "$install_checked")
 if [[ -n $previous ]]; then
-	progress 'Installing the previous archive as the intermediate toolchain'
-	write_source "$source_file" file:/previous
+	mapfile -t previous_specs < <(awk -F '\t' '{print $2 "=" $3}' "$previous_checked")
+fi
+
+if [[ $mode == full ]]; then
+	progress 'Installing compiler build and validation prerequisites'
+	apt_install ca-certificates gnupg build-essential gdb pkg-config libssl-dev jq
+	progress 'Installing Jammy distro Rust packages for the ownership baseline'
+	apt_install rust-all rust-doc cargo-doc rust-src
+
+	if ! old_runtime_line=$(
+		dpkg-query -W -f='${binary:Package}\t${Version}\t${db:Status-Status}\n' 2>/dev/null |
+			awk -F '\t' '$1 ~ /^libstd-rust-[0-9]/ && $3 == "installed" { print $1 "\t" $2; exit }'
+	); then
+		old_runtime_line=
+	fi
+	if [[ -z $old_runtime_line ]]; then
+		die 'could not find the Jammy baseline libstd-rust runtime'
+	fi
+	old_runtime_package=${old_runtime_line%%$'\t'*}
+	old_runtime_version=${old_runtime_line#*$'\t'}
+	progress "Retaining baseline runtime $old_runtime_package through the upgrade"
+	keepalive=$work/runtime-keepalive
+	mkdir --parents -- "$keepalive/DEBIAN"
+	printf '%s\n' \
+		'Package: rust-apt-runtime-keepalive' \
+		'Version: 0.0.1' \
+		'Architecture: all' \
+		'Maintainer: Rust APT Test <test@example.invalid>' \
+		"Depends: $old_runtime_package (= $old_runtime_version)" \
+		'Description: Keep the Jammy Rust runtime during an upgrade test' \
+		' A temporary reverse dependency used only by the integration test.' \
+		>"$keepalive/DEBIAN/control"
+	dpkg-deb --build --root-owner-group "$keepalive" "$work/runtime-keepalive.deb" >/dev/null
+	dpkg --install "$work/runtime-keepalive.deb" >/dev/null
+fi
+
+write_source "$source_file" "file:$(file_uri "$repo")"
+if [[ $mode == release ]]; then
+	progress 'Updating package lists from the signed archive only'
 	apt_update
-	install_archive_set
+	progress 'Installing the exact current archive packages and validation prerequisites'
+	apt_install ca-certificates gnupg build-essential gdb pkg-config libssl-dev jq \
+		"${current_specs[@]}"
+elif [[ -n $previous ]]; then
+	progress 'Installing the previous archive as the intermediate toolchain'
+	write_source "$source_file" "file:$(file_uri "$previous")"
+	apt_update
+	apt_install "${previous_specs[@]}"
 	assert_installed "$previous_checked"
 	if [[ "$(dpkg-query -W -f='${Version}' "$old_runtime_package" 2>/dev/null)" != "$old_runtime_version" ]]; then
 		die "baseline runtime $old_runtime_package was lost during intermediate installation"
 	fi
 
-	progress 'Upgrading from the previous archive to the current archive'
-	write_source "$source_file" file:/repo
+	progress 'Upgrading the previous archive to the current archive packages'
+	write_source "$source_file" "file:$(file_uri "$repo")"
 	apt_update
-	apt_upgrade
+	apt_upgrade "${current_all_specs[@]}"
 else
-	progress 'Upgrading the Jammy baseline through APT'
+	progress 'Updating package lists from the signed archive only'
 	apt_update
-	apt_upgrade
-	# rust-lldb is deliberately absent from the baseline because Jammy's
-	# current candidate is not installable.  Assert every other archive
-	# package before adding that one package and its debugger dependencies.
-	current_upgrade_checked=$work/current-upgrade.checked
-	awk -F '\t' '$2 != "rust-lldb"' "$current_checked" >"$current_upgrade_checked"
-	assert_installed "$current_upgrade_checked"
-	progress 'Installing the remaining current archive packages individually'
-	apt_install rustc
-	apt_install cargo
-	apt_install rust-all
-	apt_install lldb
-	apt_install python3-lldb
-	apt_install rust-lldb
-	apt_install rust-doc
-	apt_install cargo-doc
-	apt_install rust-src
+	progress 'Upgrading the Jammy baseline archive packages through APT'
+	apt_upgrade "${current_all_specs[@]}"
 fi
-assert_installed "$current_checked"
-if [[ "$(dpkg-query -W -f='${Version}' "$old_runtime_package" 2>/dev/null)" != "$old_runtime_version" ]]; then
-	die "baseline runtime $old_runtime_package was not retained through apt upgrade"
+assert_installed "$install_checked"
+if [[ $mode == full ]]; then
+	if [[ "$(dpkg-query -W -f='${Version}' "$old_runtime_package" 2>/dev/null)" != "$old_runtime_version" ]]; then
+		die "baseline runtime $old_runtime_package was not retained through the archive upgrade"
+	fi
+	printf 'Baseline runtime %s remains installed through the upgrade\n' "$old_runtime_package"
 fi
-printf 'Baseline runtime %s remains installed through the upgrade\n' "$old_runtime_package"
 
 release_version=$(jq -er '.version' "$repo/releases.json")
 
-progress 'Checking executable discovery, sysroot, source, and documentation links'
+if [[ $mode == full ]]; then
+	progress 'Checking executable discovery, sysroot, source, and documentation links'
+fi
 if [[ "$(/usr/bin/rustc --print sysroot)" != /usr ]]; then
 	die '/usr/bin/rustc does not report /usr as sysroot'
 fi
-source_target=$(readlink -f /usr/lib/rustlib/src/rust)
-if [[ $source_target != "/usr/src/rustc-$release_version" ]]; then
-	die "source symlink points to $source_target, expected /usr/src/rustc-$release_version"
-fi
-if [[ ! -f /usr/lib/rustlib/src/rust/library/std/src/lib.rs ]]; then
-	die 'standard-library source is missing'
-fi
-if [[ ! -L /usr/share/doc/rust/html/cargo ]]; then
-	die 'Rust documentation cargo directory is not a symlink'
-fi
-if [[ "$(readlink -f /usr/share/doc/rust/html/cargo/index.html)" != /usr/share/doc/cargo/index.html ]]; then
-	die 'Rust documentation cargo index does not resolve to local cargo-doc'
+if [[ $mode == full ]]; then
+	source_target=$(readlink -f /usr/lib/rustlib/src/rust)
+	if [[ $source_target != "/usr/src/rustc-$release_version" ]]; then
+		die "source symlink points to $source_target, expected /usr/src/rustc-$release_version"
+	fi
+	if [[ ! -f /usr/lib/rustlib/src/rust/library/std/src/lib.rs ]]; then
+		die 'standard-library source is missing'
+	fi
+	if [[ ! -L /usr/share/doc/rust/html/cargo ]]; then
+		die 'Rust documentation cargo directory is not a symlink'
+	fi
+	if [[ "$(readlink -f /usr/share/doc/rust/html/cargo/index.html)" != /usr/share/doc/cargo/index.html ]]; then
+		die 'Rust documentation cargo index does not resolve to local cargo-doc'
+	fi
 fi
 
 progress 'Compiling a hello program and a local procedural macro workspace offline'
@@ -574,55 +659,57 @@ done
 	-o 'script import sys; sys.path.insert(0, "/usr/lib/rustlib/etc"); import lldb_lookup; assert lldb_lookup.__file__.startswith("/usr/lib/rustlib/etc/")' \
 	-o quit
 
-progress 'Checking that a corrupted InRelease is rejected'
-bad_repo=$work/bad-repo
-mkdir -p "$bad_repo"
-cp -a -- "$repo/dists" "$bad_repo/"
-# Change a field covered by the clearsignature.  Appending after the armored
-# signature is not sufficient: some APT versions ignore trailing bytes.
-sed -i '0,/^Origin:/s/^Origin:.*$/Origin: Deliberate-smoke-test-corruption/' \
-	"$bad_repo/dists/jammy/InRelease"
-if ! grep -Fqx 'Origin: Deliberate-smoke-test-corruption' \
-	<(sed -n '/^Origin:/p' "$bad_repo/dists/jammy/InRelease"); then
-	die 'could not mutate the copied InRelease metadata'
-fi
-# The copied tree lives beneath mktemp's mode 0700 directory.  Let APT's
-# sandbox user traverse and read this temporary local repository.
-chmod a+rx "$work"
-chmod -R a+rX "$bad_repo"
-bad_source=/etc/apt/sources.list.d/rust-archive-bad.sources
-saved_source=$work/rust-archive.sources.saved
-mv -- "$source_file" "$saved_source"
-write_source "$bad_source" "file:$bad_repo"
-bad_log=$work/bad-update.log
-if apt "${apt_options[@]}" -o APT::Update::Error-Mode=any update >"$bad_log" 2>&1; then
-	rm -f -- "$bad_source"
-	mv -- "$saved_source" "$source_file"
-	die 'APT accepted the deliberately corrupted InRelease'
-fi
-rm -f -- "$bad_source"
-mv -- "$saved_source" "$source_file"
-if ! grep -Eiq 'not signed|invalid signature|clearsigned|badsig|hash sum' "$bad_log"; then
-	sed -n '1,80p' "$bad_log" >&2
-	die 'APT rejected corrupted metadata without an identifiable signature error'
-fi
-printf 'APT rejected corrupted InRelease with Error-Mode=any\n'
-apt_update
-
-progress 'Purging Rust packages and checking ordinary commands are gone'
-mapfile -t current_packages <"$current_names"
-apt "${apt_options[@]}" purge --assume-yes "${current_packages[@]}"
-dpkg --purge rust-apt-runtime-keepalive >/dev/null
-if ! apt-mark auto "$old_runtime_package" >/dev/null 2>&1; then
-	printf 'warning: could not mark baseline runtime automatic for autoremove\n' >&2
-fi
-apt "${apt_options[@]}" autoremove --assume-yes
-hash -r
-for command in rustc rustdoc cargo rustfmt cargo-fmt clippy-driver cargo-clippy rust-gdb rust-lldb; do
-	if command -v "$command" >/dev/null 2>&1; then
-		die "ordinary Rust command remains after purge: $command"
+if [[ $mode == full ]]; then
+	progress 'Checking that a corrupted InRelease is rejected'
+	bad_repo=$work/bad-repo
+	mkdir --parents -- "$bad_repo"
+	cp --archive -- "$repo/dists" "$bad_repo/"
+	sed -i '0,/^Origin:/s/^Origin:.*$/Origin: Deliberate-smoke-test-corruption/' \
+		"$bad_repo/dists/jammy/InRelease"
+	if ! grep --fixed-strings --line-regexp --quiet 'Origin: Deliberate-smoke-test-corruption' \
+		<(sed --quiet '/^Origin:/p' "$bad_repo/dists/jammy/InRelease"); then
+		die 'could not mutate the copied InRelease metadata'
 	fi
-done
-printf 'Rust tool commands are absent after purge and autoremove\n'
+	chmod a+rx "$work"
+	chmod --recursive a+rX "$bad_repo"
+	bad_source=$work/rust-archive-bad.sources
+	saved_source=$work/rust-archive.sources.saved
+	mv -- "$source_file" "$saved_source"
+	write_source "$bad_source" "file:$(file_uri "$bad_repo")"
+	bad_log=$work/bad-update.log
+	if apt "${apt_options[@]}" \
+		-o "Dir::Etc::sourcelist=$bad_source" -o 'Dir::Etc::sourceparts=-' \
+		-o 'APT::Get::List-Cleanup=false' \
+		-o APT::Update::Error-Mode=any update >"$bad_log" 2>&1; then
+		mv -- "$saved_source" "$source_file"
+		rm --force -- "$bad_source"
+		die 'APT accepted the deliberately corrupted InRelease'
+	fi
+	rm --force -- "$bad_source"
+	mv -- "$saved_source" "$source_file"
+	if ! grep --extended-regexp --ignore-case --quiet \
+		'not signed|invalid signature|clearsigned|badsig|hash sum' "$bad_log"; then
+		sed --quiet '1,80p' "$bad_log" >&2
+		die 'APT rejected corrupted metadata without an identifiable signature error'
+	fi
+	printf 'APT rejected corrupted InRelease with Error-Mode=any\n'
+	apt_update
+
+	progress 'Purging Rust packages and checking ordinary commands are gone'
+	mapfile -t current_packages <"$current_names"
+	apt "${apt_options[@]}" purge --assume-yes "${current_packages[@]}"
+	dpkg --purge rust-apt-runtime-keepalive >/dev/null
+	if ! apt-mark auto "$old_runtime_package" >/dev/null 2>&1; then
+		printf 'warning: could not mark baseline runtime automatic for autoremove\n' >&2
+	fi
+	apt "${apt_options[@]}" autoremove --assume-yes
+	hash -r
+	for command in rustc rustdoc cargo rustfmt cargo-fmt clippy-driver cargo-clippy rust-gdb rust-lldb; do
+		if command -v "$command" >/dev/null 2>&1; then
+			die "ordinary Rust command remains after purge: $command"
+		fi
+	done
+	printf 'Rust tool commands are absent after purge and autoremove\n'
+fi
 
 printf '\nJammy smoke test passed.\n'

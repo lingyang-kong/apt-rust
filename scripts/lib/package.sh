@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # Package layout and construction for the ordinary Jammy Rust packages.
-#
 # This file is a library.  The caller is expected to source common.sh first;
 # common.sh supplies die, require_command, safe_extract, sha256, and
 # tree_bytes.  None of the public functions writes status to stdout except

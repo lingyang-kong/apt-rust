@@ -437,6 +437,7 @@ retention__render() {
 	if ((bytes > max_bytes)); then
 		return 1
 	fi
+	archive__set_public_permissions "$stage"
 }
 
 build_retained_archive() (

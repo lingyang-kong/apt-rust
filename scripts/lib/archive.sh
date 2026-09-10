@@ -163,6 +163,14 @@ measure_pages_artifact_bytes() {
 		--exclude=.git --exclude=.github --create --file=- . | wc --bytes
 }
 
+archive__set_public_permissions() {
+	local stage=$1
+	if ! find "$stage" -type d -exec chmod 0755 -- {} + ||
+		! find "$stage" -type f -exec chmod 0644 -- {} +; then
+		die 'cannot make completed archive publicly readable'
+	fi
+}
+
 build_archive() {
 	local package_dir=$1 stage=$2 metadata=$3 key_file=$4 max_bytes=$5
 	local fingerprint bytes inventory
@@ -204,4 +212,5 @@ build_archive() {
 	if ((bytes > max_bytes)); then
 		die "archive is $bytes bytes; limit is $max_bytes"
 	fi
+	archive__set_public_permissions "$stage"
 }

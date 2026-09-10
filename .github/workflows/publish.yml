@@ -10,6 +10,11 @@ on:
         required: false
         default: false
         type: boolean
+      full_validation:
+        description: Build and run upgrade, documentation, signature-rejection and removal checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -35,7 +40,7 @@ jobs:
       - name: Poll the published manifest
         id: poll
         env:
-          FORCE_BUILD: ${{ inputs.force_build || false }}
+          FORCE_BUILD: ${{ inputs.force_build || inputs.full_validation || false }}
         run: |
           changed="$(scripts/poll-release.sh)"
           printf 'changed=%s\n' "$changed" >>"$GITHUB_OUTPUT"
@@ -93,22 +98,33 @@ jobs:
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
         run: scripts/sync-apt-repo.sh
 
-      - name: Test the generated archive on Jammy
-        run: tests/test-jammy.sh dist
+      - name: Save build cache
+        id: save-cache
+        background: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - wait: [shellcheck, shell-tests]
 
-      - parallel:
-          - name: Save build cache
-            uses: actions/cache/save@v4
-            with:
-              path: ${{ env.CACHE_DIR }}
-              key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Test the generated archive on the Jammy runner
+        env:
+          FULL_VALIDATION: ${{ inputs.full_validation || false }}
+        run: |
+          args=()
+          if [[ $FULL_VALIDATION == true ]]; then
+            args+=(--full)
+          fi
+          tests/test-jammy.sh "${args[@]}" dist
 
-          - name: Upload Pages artifact
-            uses: actions/upload-pages-artifact@v3
-            with:
-              path: dist
+      - name: Finish saving build cache
+        wait: save-cache
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
 
   deploy:
     needs: build

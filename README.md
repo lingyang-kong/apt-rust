@@ -151,9 +151,21 @@ Configuration is supplied through environment variables:
 | `MAX_BYTES`           | Maximum deployable archive size; defaults to `1073741824` bytes (1 GiB)                      |
 | `RUST_CHANNEL`        | `stable` (the default) or a stable `X.Y.Z` release version                                   |
 
-The clean Jammy integration path may install `python3-lldb` only as an external LLDB binding. It is not a build or test-framework dependency of this project.
+## Native Jammy archive test
 
-The current status and exact commands to reproduce validation are in [docs/validation.md](docs/validation.md).
+`tests/test-jammy.sh [--full] [--allow-system-changes] DIST [PREVIOUS_DIST]` tests an archive on a native Jammy host. It uses `sudo` and changes installed packages. It runs automatically only on a GitHub-hosted Linux VM, identified by `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`. On every other machine, pass `--allow-system-changes` and use a disposable Jammy system.
+
+The default release test installs the current tool packages at their exact Debian versions in one APT operation. It skips the Ubuntu baseline, documentation and source-package installation, purge, and metadata-tampering lifecycle checks. Pass `--full` to keep that lifecycle coverage. `PREVIOUS_DIST` requires `--full` and exercises the archive-upgrade path.
+
+Run full validation after changing package layout, dependencies, maintainer scripts, or upgrade/removal behavior. Routine releases still verify the whole archive and exercise the newly installed compiler, Cargo, formatter, Clippy, and debugger integrations.
+
+For complete lifecycle coverage in a clean environment, invoke the full test manually on a disposable Jammy machine. Append `PREVIOUS_DIST` when exercising an archive upgrade:
+
+```sh
+tests/test-jammy.sh --full --allow-system-changes dist
+```
+
+The test has no Docker or automatic container path.
 
 ## Local archive activation
 
@@ -169,7 +181,9 @@ The migration temporarily moves the old directory before installing the link. Re
 
 ## Publication
 
-The publication workflow is disabled until the repository variable `PUBLICATION_ENABLED` is set to `true`. It polls for a newer release, then builds and validates the complete archive. It runs `tests/test-jammy.sh dist` after the build, and waits for the background ShellCheck and shell tests before saving the cache or uploading the Pages artifact. Dependency installation starts before checkout. Its `contents: read` permission applies by default; only the deployment job receives the Pages and identity-token permissions it needs. Concurrent publications share one non-cancelling `rust-pages` group.
+The publication workflow is disabled until the repository variable `PUBLICATION_ENABLED` is set to `true`. Its `full_validation` manual-dispatch input defaults to false. Selecting it forces a build even when polling finds the current manifest and runs the native test with `--full`.
+
+ShellCheck and the synthetic shell tests run in parallel with every archive build. After a successful archive build, the workflow starts saving the build cache in the background, waits for those checks, and starts the native APT test. Cache saving finishes even when the smoke test fails; a cached build must still pass validation before Pages upload. Dependency installation starts before checkout. Its `contents: read` permission applies by default; only the deployment job receives the Pages and identity-token permissions it needs. Concurrent publications share one non-cancelling `rust-pages` group.
 
 Cached upstream components are verified against their expected hashes. A failed build, validation failure, or archive larger than `MAX_BYTES` leaves the current local archive intact; the completed-generation link changes atomically only after success. Creating or changing a remote publication remains a maintainer action.
 

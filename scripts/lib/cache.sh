@@ -47,7 +47,8 @@ publisher_digest() {
 			scripts/migrate-archive.sh scripts/lib/activation.sh \
 			scripts/lib/cache.sh scripts/lib/upstream.sh scripts/lib/archive.sh \
 			scripts/lib/retention.sh scripts/lib/history-auth.sh \
-			keys/rust-release.asc .github/workflows/publish.yml
+			keys/rust-release.asc .github/workflows/publish.yml \
+			tests/test-jammy.sh tests/jammy-smoke.sh
 	) | sha256sum | cut --delimiter=' ' --fields=1
 }
 

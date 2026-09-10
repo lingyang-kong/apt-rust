@@ -35,6 +35,8 @@ source "$ROOT_DIR/tests/test-apt-policy.sh"
 source "$ROOT_DIR/tests/test-discovery.sh"
 # shellcheck source=tests/test-activation.sh
 source "$ROOT_DIR/tests/test-activation.sh"
+# shellcheck source=tests/test-jammy-runner.sh
+source "$ROOT_DIR/tests/test-jammy-runner.sh"
 
 test_layout_and_versioning() {
 	local expected_names expected_depends
@@ -296,7 +298,12 @@ test_signed_archive_and_activation() {
 	jq --arg deb "$DEB_VERSION" '. + {debian_version:$deb, suite:"jammy", architecture:"amd64"}' \
 		"$TOY_RELEASE" >"$metadata"
 	make_test_key "$directory/gnupg" "$private"
+	mkdir --mode=0700 -- "$stage"
+	chmod 0600 -- "$private"
+	chmod 0600 -- "$TOY_PACKAGES"/*.deb
 	build_archive "$TOY_PACKAGES" "$stage" "$metadata" "$private" '1000000000'
+	assert_public_archive "$stage"
+	assert_eq 600 "$(stat --format='%a' "$private")" 'signing key stays private'
 	assert_file "$stage/releases.json" 'archive release metadata'
 	jq -e 'any(.assets[]; .component == "rustc-src")' "$stage/releases.json" >/dev/null
 	assert_file "$stage/dists/jammy/InRelease" 'inline release signature'
@@ -463,6 +470,7 @@ tests=(
 	test_legacy_fingerprint_migration
 	test_retained_cache_pruning
 	test_jammy_smoke_has_no_embedded_python
+	test_native_jammy_wrapper
 	test_deployment_budget_constant
 )
 passed=0

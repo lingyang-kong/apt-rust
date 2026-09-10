@@ -1,45 +1,48 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -o errexit -o nounset -o pipefail
 
 usage() {
-	printf 'usage: %s DIST [PREVIOUS_DIST]\n' "${0##*/}" >&2
+	printf 'usage: %s [--full] [--allow-system-changes] DIST [PREVIOUS_DIST]\n' "${0##*/}" >&2
 	exit 2
 }
 
-if (($# != 1 && $# != 2)); then
+mode=release
+allow_system_changes=false
+while (($# > 0)); do
+	case $1 in
+	--full) mode=full; shift ;;
+	--allow-system-changes) allow_system_changes=true; shift ;;
+	--) shift; break ;;
+	-*) usage ;;
+	*) break ;;
+	esac
+done
+if (($# < 1 || $# > 2)); then
 	usage
 fi
+if (($# == 2)) && [[ $mode != full ]]; then
+	printf 'PREVIOUS_DIST requires --full\n' >&2
+	exit 2
+fi
 
-dist=$(cd -- "$1" && pwd -P)
+if [[ $allow_system_changes != true ]] &&
+	[[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted || ${RUNNER_OS:-} != Linux ]]; then
+	printf 'Use --allow-system-changes only on a disposable Jammy machine; this test installs system packages.\n' >&2
+	exit 2
+fi
+
 test_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-if [[ ! -f "$dist/releases.json" ]]; then
-	printf 'archive has no releases.json: %s\n' "$dist" >&2
-	exit 1
-fi
-
-docker_bin=${DOCKER:-docker}
-if ! command -v "$docker_bin" >/dev/null 2>&1; then
-	printf 'Docker executable not found: %s\n' "$docker_bin" >&2
-	exit 1
-fi
-
-mounts=(
-	--mount "type=bind,source=$dist,target=/repo,readonly"
-	--mount "type=bind,source=$test_dir,target=/tests,readonly"
-)
-smoke_args=(/repo)
-if (($# == 2)); then
-	previous=$(cd -- "$2" && pwd -P)
-	if [[ ! -f "$previous/releases.json" ]]; then
-		printf 'previous archive has no releases.json: %s\n' "$previous" >&2
+archives=()
+for archive in "$@"; do
+	archive=$(realpath -- "$archive")
+	if [[ ! -d $archive || ! -f $archive/releases.json ]]; then
+		printf 'archive has no releases.json: %s\n' "$archive" >&2
 		exit 1
 	fi
-	mounts+=(--mount "type=bind,source=$previous,target=/previous,readonly")
-	smoke_args+=(/previous)
-fi
+	archives+=("$archive")
+done
 
-printf 'Running clean Ubuntu 22.04 Jammy smoke test for %s\n' "$dist"
-"$docker_bin" run --rm \
-	--env JAMMY_SMOKE_IN_CONTAINER=1 \
-	"${mounts[@]}" \
-	ubuntu:22.04 /tests/jammy-smoke.sh "${smoke_args[@]}"
+printf 'Running native Jammy %s validation for %s\n' "$mode" "${archives[0]}"
+exec sudo env --ignore-environment PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+	JAMMY_SMOKE_ALLOW_SYSTEM_CHANGES=1 \
+	/bin/bash "$test_dir/jammy-smoke.sh" --mode "$mode" "${archives[@]}"

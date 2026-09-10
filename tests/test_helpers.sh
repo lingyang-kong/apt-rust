@@ -30,6 +30,15 @@ assert_symlink() {
 	fi
 }
 
+assert_public_archive() {
+	local archive=$1 inaccessible
+	inaccessible=$(find "$archive" \( -type d ! -perm -0005 -o -type f ! -perm -0004 \) -print -quit)
+	if [[ -n $inaccessible ]]; then
+		printf 'archive is not readable by an unrelated APT user: %s\n' "$inaccessible" >&2
+		return 1
+	fi
+}
+
 setup_apt_test_root() {
 	local root=$1
 	mkdir --parents "$root/lists/partial" "$root/cache/archives/partial" "$root/preferences.d"

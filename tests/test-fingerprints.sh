@@ -3,20 +3,22 @@
 test_package_and_publisher_fingerprints() (
 	set -o errexit -o nounset -o pipefail
 	local fixture_root="$WORK_DIR/fingerprints"
-	mkdir --parents "$fixture_root/scripts/lib" "$fixture_root/keys" "$fixture_root/.github/workflows"
+	mkdir --parents "$fixture_root/scripts/lib" "$fixture_root/keys" "$fixture_root/.github/workflows" \
+		"$fixture_root/tests"
 	local file recipe publisher
 	for file in scripts/lib/common.sh scripts/lib/package.sh scripts/lib/cache.sh \
 		scripts/lib/upstream.sh scripts/lib/archive.sh scripts/lib/retention.sh scripts/lib/history-auth.sh \
 		scripts/sync-apt-repo.sh scripts/poll-release.sh keys/rust-release.asc \
 		scripts/migrate-archive.sh scripts/lib/activation.sh \
-		.github/workflows/publish.yml; do
+		.github/workflows/publish.yml tests/test-jammy.sh tests/jammy-smoke.sh; do
 		printf 'fixture %s\n' "$file" >"$fixture_root/$file"
 	done
 	recipe=$(recipe_digest "$fixture_root")
 	publisher=$(publisher_digest "$fixture_root")
 	for file in scripts/poll-release.sh scripts/lib/archive.sh scripts/lib/retention.sh \
 		scripts/migrate-archive.sh scripts/lib/activation.sh \
-		scripts/lib/cache.sh scripts/sync-apt-repo.sh .github/workflows/publish.yml; do
+		scripts/lib/cache.sh scripts/sync-apt-repo.sh .github/workflows/publish.yml \
+		tests/test-jammy.sh tests/jammy-smoke.sh; do
 		printf 'publishing change\n' >>"$fixture_root/$file"
 		assert_eq "$recipe" "$(recipe_digest "$fixture_root")" "$file does not affect package identity"
 		if [[ $(publisher_digest "$fixture_root") == "$publisher" ]]; then

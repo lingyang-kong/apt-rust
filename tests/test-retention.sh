@@ -128,8 +128,10 @@ test_retained_archive() {
 	new_packages=$TOY_PACKAGES
 	retention__metadata "$TOY_RELEASE" "$new_metadata" "$new_version" "$new_revision"
 	cp -- "$old_stage/releases.json" "$old_json"
+	mkdir --mode=0700 -- "$retained_stage"
 	build_retained_archive "$new_packages" "$retained_stage" "$new_metadata" "$private" \
 		'1000000000' "$old_json" "$old_stage/releases.json" "$cache"
+	assert_public_archive "$retained_stage"
 	assert_file "$retained_stage/releases.json" 'merged retained archive metadata'
 	gpgv --keyring "$retained_stage/rust-archive-keyring.gpg" \
 		"$retained_stage/dists/jammy/Release.gpg" "$retained_stage/dists/jammy/Release" \
@@ -233,6 +235,7 @@ test_retained_archive() {
 	while IFS= read -r package; do
 		cp -- "$old_stage/$package" "$normal_cache/packages/$old_debian/${package##*/}"
 	done < <(jq --raw-output '.packages[].filename' "$old_stage/releases.json")
+	chmod 0600 -- "$normal_cache/packages/$old_debian"/*.deb
 	curl() {
 		local output='' url='' option
 		while (($# > 0)); do
@@ -279,6 +282,7 @@ test_retained_archive() {
 	build_retained_archive "$new_packages" "$cached_stage" "$new_metadata" "$private" \
 		'1000000000' "$old_json" 'https://fixtures.invalid/releases.json' "$normal_cache"
 	retention__assert_previous_bytes "$old_stage" "$cached_stage"
+	assert_public_archive "$cached_stage"
 	unset -f curl
 
 	# Twelve records with arbitrary package identities are not a valid Rust
