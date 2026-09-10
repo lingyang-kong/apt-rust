@@ -373,6 +373,7 @@ verify_apt_readability() {
 	for name in dists/jammy/main/binary-amd64/Packages \
 		dists/jammy/main/binary-amd64/Packages.gz; do
 		if ! /usr/sbin/runuser --user _apt -- test -r "$archive/$name"; then
+			namei --long -- "$archive/$name" >&2
 			die "APT user _apt cannot read $archive/$name; check archive directory permissions"
 		fi
 	done

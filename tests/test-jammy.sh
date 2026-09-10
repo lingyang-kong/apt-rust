@@ -10,9 +10,18 @@ mode=release
 allow_system_changes=false
 while (($# > 0)); do
 	case $1 in
-	--full) mode=full; shift ;;
-	--allow-system-changes) allow_system_changes=true; shift ;;
-	--) shift; break ;;
+	--full)
+		mode=full
+		shift
+		;;
+	--allow-system-changes)
+		allow_system_changes=true
+		shift
+		;;
+	--)
+		shift
+		break
+		;;
 	-*) usage ;;
 	*) break ;;
 	esac

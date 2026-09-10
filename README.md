@@ -165,8 +165,6 @@ For complete lifecycle coverage in a clean environment, invoke the full test man
 tests/test-jammy.sh --full --allow-system-changes dist
 ```
 
-The test has no Docker or automatic container path.
-
 ## Local archive activation
 
 The activation helper, `scripts/lib/activation.sh`, publishes a completed archive by atomically replacing `OUT_DIR` with a symbolic link to a generation in a sibling store. For the default output `dist`, the live link points into `.dist.generations/generation-*`. Keep that store beside the output: the live archive depends on it.

@@ -12,7 +12,7 @@ test_native_jammy_wrapper() (
 	printf '{}\n' >"$archive/releases.json"
 	printf '{}\n' >"$previous/releases.json"
 	ln --symbolic -- "$archive" "$directory/dist"
-cat >"$directory/bin/sudo" <<'SH'
+	cat >"$directory/bin/sudo" <<'SH'
 #!/bin/sh
 exec "$@"
 SH

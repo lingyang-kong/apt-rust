@@ -6,7 +6,7 @@ test_apt_candidate_selection() (
 	local directory="$WORK_DIR/apt-policy"
 	local repository version origin
 	setup_apt_test_root "$directory"
-	APT_TEST_OPTIONS+=( -o 'APT::Get::List-Cleanup=true' )
+	APT_TEST_OPTIONS+=(-o 'APT::Get::List-Cleanup=true')
 	for repository in ubuntu rust-same rust-new; do
 		case $repository in
 		ubuntu)

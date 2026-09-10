@@ -23,6 +23,10 @@ archive__prepare_store() {
 		fi
 	fi
 	archive__check_store "$store"
+
+	if ! chmod 0755 -- "$store"; then
+		die "cannot make archive store traversable: $store"
+	fi
 }
 
 archive__generation_target() {

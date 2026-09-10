@@ -23,11 +23,11 @@ discovery__sign_manifest() {
 
 discovery__curl() {
 	local output='' url='' option
-	while (( $# > 0 )); do
+	while (($# > 0)); do
 		option=$1
 		case $option in
-		--output|--proto|--proto-redir|--retry|--connect-timeout|--max-time)
-			if (( $# < 2 )); then
+		--output | --proto | --proto-redir | --retry | --connect-timeout | --max-time)
+			if (($# < 2)); then
 				return 2
 			fi
 			if [[ $option == '--output' ]]; then
@@ -35,7 +35,7 @@ discovery__curl() {
 			fi
 			shift 2
 			;;
-		--fail|--silent|--show-error|--location)
+		--fail | --silent | --show-error | --location)
 			shift
 			;;
 		--*)

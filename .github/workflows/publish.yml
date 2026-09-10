@@ -53,7 +53,8 @@ jobs:
       contents: read
       pages: read
     env:
-      CACHE_DIR: .build/cache
+      CACHE_DIR: /tmp/rust-apt-cache
+      OUT_DIR: /tmp/rust-apt-dist
     steps:
       - name: Install shell and packaging dependencies
         id: install
@@ -64,21 +65,22 @@ jobs:
             bash jq curl gnupg apt-utils dpkg-dev binutils patchelf xz-utils \
             coreutils findutils util-linux shellcheck
 
-      - uses: actions/configure-pages@v5
-        background: true
-
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
       - name: Restore build cache
         id: cache
+        background: true
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CACHE_DIR }}
           key: rust-apt-cache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             rust-apt-cache-${{ runner.os }}-
+
+      - uses: actions/configure-pages@v5
+        background: true
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - wait: install
 
@@ -91,6 +93,8 @@ jobs:
         id: shell-tests
         background: true
         run: tests/test.sh
+
+      - wait: cache
 
       - name: Build the archive
         env:
@@ -116,15 +120,12 @@ jobs:
           if [[ $FULL_VALIDATION == true ]]; then
             args+=(--full)
           fi
-          tests/test-jammy.sh "${args[@]}" dist
-
-      - name: Finish saving build cache
-        wait: save-cache
+          tests/test-jammy.sh "${args[@]}" "$OUT_DIR"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: ${{ env.OUT_DIR }}
 
   deploy:
     needs: build

@@ -42,12 +42,18 @@ test_atomic_activation() (
 	mkdir --parents -- "$directory"
 	output="$directory/current"
 	stage="$directory/first"
-	activation__fixture "$stage" old
-	activate_archive "$stage" "$output"
+	(
+		umask 0077
+		activation__fixture "$stage" old
+		archive__set_public_permissions "$stage"
+		activate_archive "$stage" "$output"
+	)
 	assert_symlink "$output" 'first publication uses managed pointer'
 	assert_eq old "$(jq --raw-output '.version' "$output/releases.json")" 'first publication'
 	store=$(archive__store_path "$output")
+	assert_eq 755 "$(stat --format='%a' "$store")" 'private build umask does not hide archive store'
 	old=$(realpath -- "$output")
+	assert_public_archive "$old"
 	assert_eq "$(measure_pages_artifact_bytes "$old")" "$(measure_pages_artifact_bytes "$output")" \
 		'Pages tar follows the archive pointer'
 	assert_eq "$(tree_bytes "$old")" "$(tree_bytes "$output/")" \
@@ -57,7 +63,9 @@ test_atomic_activation() (
 		'Pages artifact contains archive files through the pointer'
 	stage="$directory/second"
 	activation__fixture "$stage" new
+	chmod 0700 -- "$store"
 	activate_archive "$stage" "$output"
+	assert_eq 755 "$(stat --format='%a' "$store")" 'existing archive store becomes traversable'
 	assert_eq new "$(jq --raw-output '.version' "$output/releases.json")" 'second publication'
 	if [[ -e $old || -e $stage ]]; then
 		die 'activation did not clean the previous generation and staging path'
@@ -79,11 +87,26 @@ test_atomic_activation() (
 			status=$?
 		fi
 		case $fault in
-		rename-failure) expected=old; assert_eq 1 "$status" 'rename failure status' ;;
-		before-term) expected=old; assert_eq 143 "$status" 'interruption before commit' ;;
-		after-term) expected=new; assert_eq 143 "$status" 'interruption after commit' ;;
-		before-kill) expected=old; assert_eq 137 "$status" 'kill before commit' ;;
-		after-kill) expected=new; assert_eq 137 "$status" 'kill after commit' ;;
+		rename-failure)
+			expected=old
+			assert_eq 1 "$status" 'rename failure status'
+			;;
+		before-term)
+			expected=old
+			assert_eq 143 "$status" 'interruption before commit'
+			;;
+		after-term)
+			expected=new
+			assert_eq 143 "$status" 'interruption after commit'
+			;;
+		before-kill)
+			expected=old
+			assert_eq 137 "$status" 'kill before commit'
+			;;
+		after-kill)
+			expected=new
+			assert_eq 137 "$status" 'kill after commit'
+			;;
 		esac
 		assert_symlink "$output" "$fault preserves output pointer"
 		assert_eq "$expected" "$(jq --raw-output '.version' "$output/releases.json")" "$fault active metadata"
