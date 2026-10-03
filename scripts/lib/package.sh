@@ -905,7 +905,7 @@ package__system_dependencies() {
 	local roots=$1
 	local debian=$WORK_DIR/debian shlibs=$WORK_DIR/shlibs.local
 	local library_dir=$roots/$RUNTIME_PACKAGE/usr/lib/$MULTIARCH
-	local path soname name major line output value package root
+	local path soname name soname_suffix line output value package root
 	if ! mkdir --parents -- "$debian"; then
 		return 1
 	fi
@@ -919,11 +919,16 @@ package__system_dependencies() {
 			if ! soname=$(package__soname "$path"); then
 				continue
 			fi
-			if [[ $soname =~ ^(.+)\.so(\.(.+))?$ ]]; then
+			if [[ $soname =~ ^(.*)\.so\.(.*)$ ]]; then
 				name=${BASH_REMATCH[1]}
-				major=${BASH_REMATCH[3]}
-				printf '%s %s %s (= %s)\n' "$name" "$major" "$RUNTIME_PACKAGE" "$DEB_VERSION" >>"$shlibs"
+				soname_suffix=${BASH_REMATCH[2]}
+			elif [[ $soname =~ ^(.*)-([0-9].*)\.so$ ]]; then
+				name=${BASH_REMATCH[1]}
+				soname_suffix=${BASH_REMATCH[2]}
+			else
+				continue
 			fi
+			printf '%s %s %s (= %s)\n' "$name" "$soname_suffix" "$RUNTIME_PACKAGE" "$DEB_VERSION" >>"$shlibs"
 		done < <(find "$library_dir" -type f -not -type l -print0)
 	fi
 

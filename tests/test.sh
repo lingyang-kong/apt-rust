@@ -144,6 +144,35 @@ test_package_build_and_reproducibility() {
 	expect_failure 'duplicate filesystem ownership' validate_packages "$overlap_packages"
 }
 
+test_system_dependencies() {
+	init_layout '1.99.0'
+	local roots="$WORK_DIR/dependency-roots" soname output
+	local library_dir="$roots/$RUNTIME_PACKAGE/usr/lib/$MULTIARCH"
+	mkdir --parents -- "$library_dir" "$roots/rustc/usr/libexec"
+	printf '%s\n' 'int driver(void) { return 0; }' >"$WORK_DIR/driver.c"
+	printf '%s\n' '#include <stdio.h>' \
+		'int driver(void); int main(void) { puts("driver"); return driver(); }' >"$WORK_DIR/main.c"
+	for soname in librustc_driver-999a121de2f042be.so librustc_driver-abcdef.so libdriver.so.1; do
+		gcc -shared -fPIC -Wl,-soname,"$soname" -o "$library_dir/$soname" "$WORK_DIR/driver.c"
+		gcc -o "$roots/rustc/usr/libexec/rust-analyzer-proc-macro-srv" \
+			"$WORK_DIR/main.c" -L"$library_dir" -l:"$soname"
+		output=$(package__system_dependencies "$roots")
+		if [[ $soname == librustc_driver-999a121de2f042be.so ]]; then
+			assert_eq 'librustc_driver 999a121de2f042be libstd-rust-1.99 (= 1.99.0-1)' \
+				"$(cat "$WORK_DIR/shlibs.local")" 'build hash lookup with release-based package version'
+		fi
+		if [[ $output != *$'rustc\tlibc6 ('* ]]; then
+			printf 'missing system dependency for %s: %s\n' "$soname" "$output" >&2
+			return 1
+		fi
+		if [[ $output == *"$RUNTIME_PACKAGE (="* ]]; then
+			printf 'runtime dependency was not excluded: %s\n' "$output" >&2
+			return 1
+		fi
+		rm -- "$library_dir/$soname"
+	done
+}
+
 test_manifest_and_cached_asset() {
 	local directory="$WORK_DIR/manifest"
 	local manifest="$directory/channel.toml"
@@ -451,6 +480,7 @@ tests=(
 	test_debian_version_ordering
 	test_apt_candidate_selection
 	test_package_build_and_reproducibility
+	test_system_dependencies
 	test_manifest_and_cached_asset
 	test_canonical_discovery
 	test_cache_identity_and_revision_registry
